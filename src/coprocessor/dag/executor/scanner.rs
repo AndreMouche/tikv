@@ -19,7 +19,7 @@ use util::escape;
 // `Scanner` is a helper struct to wrap all common scan operations
 // for `TableScanExecutor` and `IndexScanExecutor`
 pub struct Scanner<'a> {
-    store: SnapshotStore<'a>,
+    store: SnapshotStore,
     scan_mode: ScanMode,
     key_only: bool,
     statistics: Option<&'a mut Statistics>,
@@ -29,7 +29,7 @@ pub struct Scanner<'a> {
 
 impl<'a> Scanner<'a> {
     pub fn new(
-        store: SnapshotStore<'a>,
+        store: SnapshotStore,
         desc: bool,
         key_only: bool,
         statistics: &'a mut Statistics,

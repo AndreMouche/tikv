@@ -13,4 +13,4 @@
 pub mod executor;
 pub mod dag;
 pub mod expr;
-pub use self::dag::DAGContext;
+pub use self::dag::{DAGContext,DAGStreamChunk};

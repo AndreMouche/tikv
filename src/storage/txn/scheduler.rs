@@ -37,6 +37,7 @@ use std::time::Duration;
 use std::thread;
 use std::hash::{Hash, Hasher};
 use std::u64;
+use std::sync::Arc;
 
 use prometheus::HistogramTimer;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
@@ -421,7 +422,7 @@ fn process_read(
                 .with_label_values(&[tag])
                 .observe(1f64);
             let snap_store = SnapshotStore::new(
-                snapshot.as_ref(),
+                Arc::from(snapshot),
                 start_ts,
                 ctx.get_isolation_level(),
                 !ctx.get_not_fill_cache(),

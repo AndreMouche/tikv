@@ -17,13 +17,14 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Receiver};
+// use std::sync::mpsc::{channel, Receiver};
 
 use mio::Token;
 use grpc::{self, ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
            ServerStreamingSink, UnarySink, WriteFlags};
 use futures::{future, Async, Future, Poll, Stream};
 use futures::sync::oneshot;
+use futures::sync::mpsc::{self, Receiver};
 use futures::Sink;
 use protobuf::RepeatedField;
 use kvproto::tikvpb_grpc;
@@ -60,29 +61,30 @@ pub struct Service<T: RaftStoreRouter + 'static> {
     token: Arc<AtomicUsize>, // TODO: remove it.
 }
 
-struct StreamChunk<T: Debug + Send + 'static> {
-    rc: Receiver<Option<T>>,
-}
+// struct StreamChunk<T: Debug + Send + 'static> {
+//     rc: Receiver<T>,
+// }
 
-impl<T: Debug + Send + 'static> StreamChunk<T> {
-    fn new(rc: Receiver<Option<T>>) -> StreamChunk<T> {
-        StreamChunk { rc: rc }
-    }
-}
+// impl<T: Debug + Send + 'static> StreamChunk<T> {
+//     fn new(rc: Receiver<T>) -> StreamChunk<T> {
+//         StreamChunk { rc: rc }
+//     }
+// }
 
-impl<T: Debug + Send + 'static> Stream for StreamChunk<T> {
-    type Item = (T, WriteFlags);
-    type Error = grpc::Error;
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match self.rc.recv().unwrap() {
-            Some(resp) => Ok(Async::Ready(
-                Some((resp, WriteFlags::default().buffer_hint(true))),
-            )),
-            None => Ok(Async::Ready(None)),
-            //TODO: process error
-        }
-    }
-}
+// impl<T: Debug + Send + 'static> Stream for StreamChunk<T> {
+//     type Item = (T, WriteFlags);
+//     type Error = grpc::Error;
+//     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+//         self.rc.poll()
+//         // match self.rc.recv().unwrap() {
+//         //     Some(resp) => Ok(Async::Ready(
+//         //         Some((resp, WriteFlags::default().buffer_hint(true))),
+//         //     )),
+//         //     None => Ok(Async::Ready(None)),
+//         //     //TODO: process error
+//         // }
+//     }
+// }
 
 impl<T: RaftStoreRouter + 'static> Service<T> {
     pub fn new(
@@ -129,13 +131,12 @@ fn make_callback<T: Debug + Send + 'static>() -> (Box<FnBox(T) + Send>, oneshot:
     (box callback, rx)
 }
 
-fn make_stream_callback<T: Debug + Send + 'static>()
-    -> (Box<FnMut(Option<T>) + Send>, StreamChunk<T>)
+fn make_stream_callback<T: Stream+ Debug + Send + 'static >()
+    -> (Box<FnBox(T) + Send>, oneshot::Receiver<T>)
 {
-    let (tx, rx) = channel();
-    let callback = move |resp| { tx.send(resp).unwrap(); };
-    let stream = StreamChunk::new(rx);
-    (box callback, stream)
+    let (tx, rx) = oneshot::channel();
+    let callback = move |resp| {tx.send(resp).unwrap();};
+    (box callback, rx)
 }
 
 impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
@@ -828,7 +829,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .with_label_values(&[label])
             .start_coarse_timer();
 
-        let (cb, stream) = make_stream_callback();
+        let (cb, future) = make_stream_callback();
         let res = self.end_point_scheduler.schedule(EndPointTask::Request(
             RequestTask::new(req, OnResponse::Stream(cb)),
         ));
@@ -842,7 +843,9 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             return;
         }
 
-        let future = sink.send_all(stream)
+         let future = future
+            .map_err(Error::from)
+            .and_then(|res| sink.send_all(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", label, e);

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
@@ -23,21 +23,21 @@ use coprocessor::Result;
 
 use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
 
-pub struct SelectionExecutor<'a> {
+pub struct SelectionExecutor {
     conditions: Vec<Expression>,
-    cols: Rc<Vec<ColumnInfo>>,
+    cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
-    ctx: Rc<EvalContext>,
-    src: Box<Executor + 'a>,
+    ctx: Arc<EvalContext>,
+    src: Box<Arc<Executor>>,
 }
 
-impl<'a> SelectionExecutor<'a> {
+impl SelectionExecutor {
     pub fn new(
         mut meta: Selection,
-        ctx: Rc<EvalContext>,
-        columns_info: Rc<Vec<ColumnInfo>>,
-        src: Box<Executor + 'a>,
-    ) -> Result<SelectionExecutor<'a>> {
+        ctx: Arc<EvalContext>,
+        columns_info: Arc<Vec<ColumnInfo>>,
+        src: Box<Arc<Executor>>,
+    ) -> Result<SelectionExecutor> {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
         visitor.batch_visit(&conditions)?;
@@ -53,7 +53,7 @@ impl<'a> SelectionExecutor<'a> {
 }
 
 #[allow(never_loop)]
-impl<'a> Executor for SelectionExecutor<'a> {
+impl Executor for SelectionExecutor{
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {
             let cols = inflate_with_col_for_dag(

@@ -14,6 +14,7 @@
 use std::usize;
 use std::time::Duration;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
 
@@ -39,7 +40,7 @@ use super::codec::mysql;
 use super::codec::datum::Datum;
 use super::select::select::SelectContext;
 use super::select::xeval::EvalContext;
-use super::dag::DAGContext;
+use super::dag::{DAGContext,DAGStreamChunk};
 use super::statistics::analyze::AnalyzeContext;
 use super::metrics::*;
 use super::{Error, Result};
@@ -295,13 +296,13 @@ pub struct RequestTask {
     wait_time: Option<f64>,
     timer: Instant,
     statistics: Statistics,
-    on_resp: OnResponse,
+    on_resp: OnResponse<DAGStreamChunk>,
     cop_req: Option<Result<CopRequest>>,
-    ctx: ReqContext,
+    ctx: Arc<ReqContext>,
 }
 
 impl RequestTask {
-    pub fn new(req: Request, on_resp: OnResponse) -> RequestTask {
+    pub fn new(req: Request, on_resp: OnResponse<DAGStreamChunk>) -> RequestTask {
         let timer = Instant::now_coarse();
         let deadline = timer + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
         let mut start_ts = None;
@@ -363,7 +364,7 @@ impl RequestTask {
             statistics: Default::default(),
             on_resp: on_resp,
             cop_req: Some(cop_req),
-            ctx: req_ctx,
+            ctx: Arc::new(req_ctx),
         }
     }
 
@@ -431,8 +432,8 @@ impl RequestTask {
     fn finish(mut self, resp: Option<Response>) -> Statistics {
         self.stop_record_handling();
         match resp {
-            Some(body) => self.on_resp.on_finish(body),
-            None => self.on_resp.finish_stream(None),
+            Some(body) => self.on_resp.finish_unary(body),
+            None => {},
         }
         self.statistics
     }
@@ -564,7 +565,7 @@ impl BatchRunnable<Task> for Host {
     }
 }
 
-fn err_resp(e: Error) -> Response {
+pub fn err_resp(e: Error) -> Response {
     let mut resp = Response::new();
     match e {
         Error::Region(e) => {
@@ -622,7 +623,7 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(&self, mut t: RequestTask) -> Statistics {
+    fn handle_request(self, mut t: RequestTask) -> Statistics {
         t.stop_record_waiting();
         if let Err(e) = t.check_outdated() {
             return t.finish_with_err(e);
@@ -639,23 +640,23 @@ impl TiDbEndPoint {
         }
     }
 
-    fn handle_select(&self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
+    fn handle_select(self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
         let ctx = SelectContext::new(sel, self.snap.as_ref(), &mut t.statistics, &t.ctx)?;
         let range = t.req.get_ranges().to_vec();
         ctx.handle_request(range)
     }
 
-    pub fn handle_dag(&self, dag: DAGRequest, t: &mut RequestTask) -> Result<Option<Response>> {
+    pub fn handle_dag(self, dag: DAGRequest, t: &mut RequestTask) -> Result<Option<Response>> {
         let ranges = t.req.get_ranges().to_vec();
-        let eval_ctx = Rc::new(box_try!(EvalContext::new(
+        let eval_ctx = Arc::new(box_try!(EvalContext::new(
             dag.get_time_zone_offset(),
             dag.get_flags()
         )));
-        let ctx = DAGContext::new(dag, ranges, self.snap.as_ref(), eval_ctx.clone(), &t.ctx);
+        let ctx = DAGContext::new(self.snap, dag, ranges, eval_ctx.clone(), t.ctx.clone());
         ctx.handle_request(&mut t.statistics, &mut t.on_resp)
     }
 
-    pub fn handle_analyze(&self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
+    pub fn handle_analyze(self, analyze: AnalyzeReq, t: &mut RequestTask) -> Result<Response> {
         let ranges = t.req.get_ranges().to_vec();
         let ctx = AnalyzeContext::new(
             analyze,

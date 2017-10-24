@@ -29,7 +29,7 @@ use super::histogram::Histogram;
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<'a> {
     req: AnalyzeReq,
-    snap: SnapshotStore<'a>,
+    snap: SnapshotStore,
     statistics: &'a mut Statistics,
     ranges: Vec<KeyRange>,
 }
@@ -136,7 +136,7 @@ struct SampleBuilder<'a> {
 impl<'a> SampleBuilder<'a> {
     fn new(
         mut req: AnalyzeColumnsReq,
-        snap: SnapshotStore<'a>,
+        snap: SnapshotStore,
         ranges: Vec<KeyRange>,
         statistics: &'a mut Statistics,
     ) -> Result<SampleBuilder<'a>> {

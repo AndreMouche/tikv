@@ -14,6 +14,7 @@
 // remove later
 #![allow(dead_code)]
 
+use std::sync::Arc as Rc;
 use tipb::executor::Limit;
 
 use coprocessor::Result;
@@ -21,14 +22,14 @@ use coprocessor::metrics::*;
 
 use super::{Executor, Row};
 
-pub struct LimitExecutor<'a> {
+pub struct LimitExecutor {
     limit: u64,
     cursor: u64,
-    src: Box<Executor + 'a>,
+    src: Box<Rc<Executor>>,
 }
 
-impl<'a> LimitExecutor<'a> {
-    pub fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
+impl LimitExecutor {
+    pub fn new(limit: Limit, src: Box<Rc<Executor>>) -> LimitExecutor {
         COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
         LimitExecutor {
             limit: limit.get_limit(),
@@ -38,7 +39,7 @@ impl<'a> LimitExecutor<'a> {
     }
 }
 
-impl<'a> Executor for LimitExecutor<'a> {
+impl Executor for LimitExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         if self.cursor >= self.limit {
             return Ok(None);

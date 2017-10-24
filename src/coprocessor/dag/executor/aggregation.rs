@@ -10,8 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use tipb::schema::ColumnInfo;
 use tipb::executor::Aggregation;
@@ -69,7 +68,7 @@ impl AggrFunc {
     }
 }
 
-pub struct AggregationExecutor<'a> {
+pub struct AggregationExecutor{
     group_by: Vec<Expression>,
     aggr_func: Vec<AggrFuncExpr>,
     group_keys: Vec<Rc<Vec<u8>>>,
@@ -79,16 +78,16 @@ pub struct AggregationExecutor<'a> {
     ctx: Rc<EvalContext>,
     cols: Rc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
-    src: Box<Executor + 'a>,
+    src: Box<Rc<Executor>>,
 }
 
-impl<'a> AggregationExecutor<'a> {
+impl AggregationExecutor {
     pub fn new(
         mut meta: Aggregation,
         ctx: Rc<EvalContext>,
         columns: Rc<Vec<ColumnInfo>>,
-        src: Box<Executor + 'a>,
-    ) -> Result<AggregationExecutor<'a>> {
+        src: Box<Rc<Executor>>,
+    ) -> Result<AggregationExecutor> {
         // collect all cols used in aggregation
         let mut visitor = ExprColumnRefVisitor::new(columns.len());
         let group_by = meta.take_group_by().into_vec();
@@ -159,7 +158,7 @@ impl<'a> AggregationExecutor<'a> {
     }
 }
 
-impl<'a> Executor for AggregationExecutor<'a> {
+impl Executor for AggregationExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         if !self.executed {
             self.aggregate()?;

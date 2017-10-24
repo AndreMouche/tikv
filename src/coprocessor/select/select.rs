@@ -13,6 +13,7 @@
 
 use std::usize;
 use std::rc::Rc;
+use std::sync::Arc;
 use tipb::select::{Chunk, RowMeta, SelectRequest, SelectResponse};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{ByItem, Expr, ExprType};
@@ -40,7 +41,7 @@ use super::topn_heap::TopNHeap;
 const REQUEST_CHECKPOINT: usize = 255;
 
 pub struct SelectContext<'a> {
-    snap: SnapshotStore<'a>,
+    snap: SnapshotStore,
     statistics: &'a mut Statistics,
     core: SelectContextCore,
     req_ctx: &'a ReqContext,
@@ -304,7 +305,7 @@ impl<'a> SelectContext<'a> {
 
 
 struct SelectContextCore {
-    ctx: Rc<EvalContext>,
+    ctx: Arc<EvalContext>,
     sel: SelectRequest,
     eval: Evaluator,
     cols: Either<HashSet<i64>, Vec<i64>>,
@@ -315,7 +316,7 @@ struct SelectContextCore {
     aggr_cols: Vec<ColumnInfo>,
     topn: bool,
     topn_heap: Option<TopNHeap>,
-    order_cols: Rc<Vec<ByItem>>,
+    order_cols: Arc<Vec<ByItem>>,
     limit: usize,
     desc_scan: bool,
     gks: Vec<Rc<Vec<u8>>>,
@@ -414,7 +415,7 @@ impl SelectContextCore {
         };
 
         Ok(SelectContextCore {
-            ctx: Rc::new(box_try!(EvalContext::new(
+            ctx: Arc::new(box_try!(EvalContext::new(
                 sel.get_time_zone_offset(),
                 sel.get_flags()
             ))),
@@ -437,7 +438,7 @@ impl SelectContextCore {
                     None
                 }
             },
-            order_cols: Rc::new(order_by_cols),
+            order_cols: Arc::new(order_by_cols),
             limit: limit,
             desc_scan: desc_can,
         })

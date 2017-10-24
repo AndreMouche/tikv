@@ -11,21 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
 use storage::{Key, KvPair, ScanMode, Snapshot, Statistics, Value};
 use storage::mvcc::{Error as MvccError, MvccReader};
 use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
 
-pub struct SnapshotStore<'a> {
-    snapshot: &'a Snapshot,
+pub struct SnapshotStore{
+    snapshot: Arc<Snapshot>,
     start_ts: u64,
     isolation_level: IsolationLevel,
     fill_cache: bool,
 }
 
-impl<'a> SnapshotStore<'a> {
+impl<'a> SnapshotStore {
     pub fn new(
-        snapshot: &'a Snapshot,
+        snapshot: Arc<Snapshot>,
         start_ts: u64,
         isolation_level: IsolationLevel,
         fill_cache: bool,
@@ -40,7 +41,7 @@ impl<'a> SnapshotStore<'a> {
 
     pub fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
         let mut reader = MvccReader::new(
-            self.snapshot,
+            self.snapshot.as_ref(),
             statistics,
             None,
             self.fill_cache,
@@ -58,7 +59,7 @@ impl<'a> SnapshotStore<'a> {
     ) -> Result<Vec<Result<Option<Value>>>> {
         // TODO: sort the keys and use ScanMode::Forward
         let mut reader = MvccReader::new(
-            self.snapshot,
+            self.snapshot.as_ref(),
             statistics,
             None,
             self.fill_cache,
@@ -82,7 +83,7 @@ impl<'a> SnapshotStore<'a> {
         statistics: &'a mut Statistics,
     ) -> Result<StoreScanner<'a>> {
         let mut reader = MvccReader::new(
-            self.snapshot,
+            self.snapshot.as_ref(),
             statistics,
             Some(mode),
             self.fill_cache,

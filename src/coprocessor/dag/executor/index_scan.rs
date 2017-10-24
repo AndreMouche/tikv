@@ -40,7 +40,7 @@ impl<'a> IndexScanExecutor<'a> {
     pub fn new(
         mut meta: IndexScan,
         mut key_ranges: Vec<KeyRange>,
-        store: SnapshotStore<'a>,
+        store: SnapshotStore,
         statistics: &'a mut Statistics,
     ) -> IndexScanExecutor<'a> {
         let mut pk_col = None;
@@ -69,7 +69,7 @@ impl<'a> IndexScanExecutor<'a> {
     pub fn new_with_cols_len(
         cols: i64,
         key_ranges: Vec<KeyRange>,
-        store: SnapshotStore<'a>,
+        store: SnapshotStore,
         statistics: &'a mut Statistics,
     ) -> IndexScanExecutor<'a> {
         let col_ids: Vec<i64> = (0..cols).collect();

@@ -12,8 +12,14 @@
 // limitations under the License.
 
 use std::rc::Rc;
+use std::sync::Arc;
+use std::fmt::{self,Debug,Formatter};
+use std::marker::Sync;
+use std::marker::Send;
 use std::mem;
 
+use futures::{Stream,Async,Poll};
+use grpc::{self,WriteFlags};
 use tipb::executor::{ExecType, Executor};
 use tipb::schema::ColumnInfo;
 use tipb::select::{Chunk, DAGRequest, SelectResponse};
@@ -31,52 +37,107 @@ use server::OnResponse;
 use super::executor::{AggregationExecutor, Executor as DAGExecutor, IndexScanExecutor,
                       LimitExecutor, Row, SelectionExecutor, TableScanExecutor, TopNExecutor};
 
-pub struct DAGContext<'s> {
-    columns: Rc<Vec<ColumnInfo>>,
+
+pub struct DAGContext{
+    columns: Arc<Vec<ColumnInfo>>,
     has_aggr: bool,
     req: DAGRequest,
     ranges: Vec<KeyRange>,
-    snap: &'s Snapshot,
-    eval_ctx: Rc<EvalContext>,
-    req_ctx: &'s ReqContext,
+    eval_ctx: Arc<EvalContext>,
+    req_ctx: Arc<ReqContext>,
+    snap:Box<Snapshot>,
+    store: Box<Arc<SnapshotStore>>,
 }
 
-impl<'s> DAGContext<'s> {
+pub struct DAGStreamChunk {
+    ctx:Arc<DAGContext>,
+    finished:bool,
+    exec:Box<Arc<DAGExecutor>> 
+}
+
+impl Debug for DAGStreamChunk {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{:?}", self.ctx.req) //TODO
+    }
+}
+
+impl DAGStreamChunk {
+    fn new(ctx:Arc<DAGContext>, exec:Box<Arc<DAGExecutor>>)->DAGStreamChunk {
+        DAGStreamChunk{
+            ctx:ctx,
+            finished:false,
+            exec:exec,
+        }
+    }
+    fn next(&mut self)->Option<Response> {
+        None //TODO
+    }
+}
+
+unsafe impl Send for DAGStreamChunk{}
+unsafe impl Sync for DAGStreamChunk{}
+
+impl Stream for DAGStreamChunk {
+    type Item = (Response, WriteFlags);
+    type Error = grpc::Error;
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        match self.next(){
+            Some(res)=>Ok(Async::Ready(
+                Some((res,WriteFlags::default().buffer_hint(!self.finished)))
+            )),
+            None => Ok(Async::Ready(None))
+        }
+    }
+}
+
+impl DAGContext {
     pub fn new(
+        snap:Box<Snapshot>,
         req: DAGRequest,
         ranges: Vec<KeyRange>,
-        snap: &'s Snapshot,
-        eval_ctx: Rc<EvalContext>,
-        req_ctx: &'s ReqContext,
-    ) -> DAGContext<'s> {
+        eval_ctx: Arc<EvalContext>,
+        req_ctx: Arc<ReqContext>
+    ) -> DAGContext {
+        let store = SnapshotStore::new(
+            snap.as_ref(),
+            req.get_start_ts(),
+            req_ctx.isolation_level,
+            req_ctx.fill_cache,
+        );
         DAGContext {
             req: req,
-            columns: Rc::new(vec![]),
+            columns: Arc::new(vec![]),
             ranges: ranges,
-            snap: snap,
             has_aggr: false,
             eval_ctx: eval_ctx,
             req_ctx: req_ctx,
+            snap:snap,
+            store:Box::new(Arc::new(store)),
         }
     }
 
     pub fn handle_request(
         mut self,
-        statistics: &'s mut Statistics,
-        on_resp: &'s mut OnResponse,
+        statistics: &mut Statistics,
+        on_resp: &mut OnResponse<DAGStreamChunk>,
     ) -> Result<Option<Response>> {
         self.validate_dag()?;
         let mut exec = self.build_dag(statistics)?;
         let mut chunks = vec![];
         let mut cur_chunk_count = 0;
         let is_stream = on_resp.is_stream();
+        if is_stream {
+            let stream = DAGStreamChunk::new(Arc::new(self),exec);
+            on_resp.finish_stream(stream);
+            return Ok(None);
+        }
         loop {
-            if is_stream && cur_chunk_count >= BATCH_ROW_COUNT {
-                let mut cur_chunks: Vec<Chunk> = vec![];
-                chunks = mem::replace(&mut cur_chunks, chunks);
-                let resp = response_from_chunks(cur_chunks)?;
-                on_resp.resp(resp);
-            }
+            // if is_stream && cur_chunk_count >= BATCH_ROW_COUNT {
+            //     let mut cur_chunks: Vec<Chunk> = vec![];
+            //     chunks = mem::replace(&mut cur_chunks, chunks);
+            //     let resp = response_from_chunks(cur_chunks)?;
+            //     on_resp.resp(resp);
+            // }
 
             match exec.next() {
                 Ok(Some(row)) => {
@@ -126,10 +187,10 @@ impl<'s> DAGContext<'s> {
         // check whether first exec is *scan and get the column info
         match first.get_tp() {
             ExecType::TypeTableScan => {
-                self.columns = Rc::new(first.get_tbl_scan().get_columns().to_vec());
+                self.columns = Arc::new(first.get_tbl_scan().get_columns().to_vec());
             }
             ExecType::TypeIndexScan => {
-                self.columns = Rc::new(first.get_idx_scan().get_columns().to_vec());
+                self.columns = Arc::new(first.get_idx_scan().get_columns().to_vec());
             }
             _ => {
                 return Err(box_err!(
@@ -152,61 +213,60 @@ impl<'s> DAGContext<'s> {
     // seperate first exec build action from `build_dag`
     // since it will generte mutable conflict when putting together
     fn build_first(
-        &'s self,
+        &self,
         mut first: Executor,
-        statistics: &'s mut Statistics,
-    ) -> Box<DAGExecutor + 's> {
+        statistics: &mut Statistics,
+    ) -> Box<Arc<DAGExecutor>> {
         let store = SnapshotStore::new(
-            self.snap,
+            self.snap.as_ref(),
             self.req.get_start_ts(),
             self.req_ctx.isolation_level,
             self.req_ctx.fill_cache,
         );
-
         match first.get_tp() {
-            ExecType::TypeTableScan => Box::new(TableScanExecutor::new(
+            ExecType::TypeTableScan => Box::new(Arc::new(TableScanExecutor::new(
                 first.get_tbl_scan(),
                 self.ranges.clone(),
                 store,
                 statistics,
-            )),
-            ExecType::TypeIndexScan => Box::new(IndexScanExecutor::new(
+            ))),
+            ExecType::TypeIndexScan => Box::new(Arc::new(IndexScanExecutor::new(
                 first.take_idx_scan(),
                 self.ranges.clone(),
                 store,
                 statistics,
-            )),
+            ))),
             _ => unreachable!(),
         }
     }
 
-    fn build_dag(&'s self, statistics: &'s mut Statistics) -> Result<Box<DAGExecutor + 's>> {
+    fn build_dag(& self, statistics: & mut Statistics) -> Result<Box<Arc<DAGExecutor>>> {
         let mut execs = self.req.get_executors().to_vec().into_iter();
-        let mut src = self.build_first(execs.next().unwrap(), statistics);
+        let mut src = self.build_first( execs.next().unwrap(),statistics);
         for mut exec in execs {
-            let curr: Box<DAGExecutor> = match exec.get_tp() {
+            let curr: Box<Arc<DAGExecutor>> = match exec.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
                     return Err(box_err!("got too much *scan exec, should be only one"))
                 }
-                ExecType::TypeSelection => Box::new(SelectionExecutor::new(
+                ExecType::TypeSelection => Box::new(Arc::new(SelectionExecutor::new(
                     exec.take_selection(),
                     self.eval_ctx.clone(),
                     self.columns.clone(),
                     src,
-                )?),
-                ExecType::TypeAggregation => Box::new(AggregationExecutor::new(
+                )?)),
+                ExecType::TypeAggregation => Box::new(Arc::new(AggregationExecutor::new(
                     exec.take_aggregation(),
                     self.eval_ctx.clone(),
                     self.columns.clone(),
                     src,
-                )?),
-                ExecType::TypeTopN => Box::new(TopNExecutor::new(
+                )?)),
+                ExecType::TypeTopN => Box::new(Arc::new(TopNExecutor::new(
                     exec.take_topN(),
                     self.eval_ctx.clone(),
                     self.columns.clone(),
                     src,
-                )?),
-                ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
+                )?)),
+                ExecType::TypeLimit => Box::new(Arc::new(LimitExecutor::new(exec.take_limit(), src))),
             };
             src = curr;
         }

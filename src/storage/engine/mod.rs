@@ -117,7 +117,7 @@ pub trait Engine: Send + Debug {
     fn clone(&self) -> Box<Engine + 'static>;
 }
 
-pub trait Snapshot: Send {
+pub trait Snapshot: Send{
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     #[allow(needless_lifetimes)]
@@ -136,6 +136,37 @@ pub trait Snapshot: Send {
         Err(Error::RocksDb("no user properties".to_owned()))
     }
     fn clone(&self) -> Box<Snapshot>;
+}
+
+impl Snapshot for Box<Snapshot>{
+    fn get(&self, key: &Key) -> Result<Option<Value>> {
+        self.get(key)
+    }
+    fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
+        unimplemented!()
+    }
+    #[allow(needless_lifetimes)]
+    fn iter<'a>(&'a self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<'a>>{
+        unimplemented!()
+    }
+    #[allow(needless_lifetimes)]
+    fn iter_cf<'a>(
+        &'a self,
+        cf: CfName,
+        iter_opt: IterOption,
+        mode: ScanMode,
+    ) -> Result<Cursor<'a>>{
+        unimplemented!()
+    }
+    fn get_properties(&self) -> Result<TablePropertiesCollection> {
+        self.get_properties_cf(CF_DEFAULT)
+    }
+    fn get_properties_cf(&self, _: CfName) -> Result<TablePropertiesCollection> {
+        Err(Error::RocksDb("no user properties".to_owned()))
+    }
+    fn clone(&self) -> Box<Snapshot>{
+        unimplemented!()
+    }
 }
 
 pub trait Iterator {

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use util::codec::number::NumberDecoder;
 use tipb::expression::{Expr, ExprType};
@@ -130,7 +130,7 @@ pub trait Executor {
 pub fn inflate_with_col_for_dag(
     ctx: &EvalContext,
     values: &RowColsDict,
-    columns: Rc<Vec<ColumnInfo>>,
+    columns: Arc<Vec<ColumnInfo>>,
     offsets: &[usize],
     h: i64,
 ) -> Result<Vec<Datum>> {

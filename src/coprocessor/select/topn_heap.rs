@@ -13,7 +13,7 @@
 
 use std::usize;
 use std::collections::BinaryHeap;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 use std::cmp::{self, Ordering};
 use std::cell::RefCell;
 use tipb::expression::ByItem;

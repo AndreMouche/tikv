@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::usize;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 use std::vec::IntoIter;
 
 use tipb::executor::TopN;
@@ -53,23 +53,23 @@ impl OrderBy {
     }
 }
 
-pub struct TopNExecutor<'a> {
+pub struct TopNExecutor {
     order_by: OrderBy,
     cols: Rc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
     heap: Option<TopNHeap>,
     iter: Option<IntoIter<SortRow>>,
     ctx: Rc<EvalContext>,
-    src: Box<Executor + 'a>,
+    src: Box<Rc<Executor>>,
 }
 
-impl<'a> TopNExecutor<'a> {
+impl TopNExecutor {
     pub fn new(
         mut meta: TopN,
         ctx: Rc<EvalContext>,
         columns_info: Rc<Vec<ColumnInfo>>,
-        src: Box<Executor + 'a>,
-    ) -> Result<TopNExecutor<'a>> {
+        src: Box<Rc<Executor>>,
+    ) -> Result<TopNExecutor> {
         let order_by = meta.take_order_by().into_vec();
 
         let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
@@ -111,7 +111,7 @@ impl<'a> TopNExecutor<'a> {
     }
 }
 
-impl<'a> Executor for TopNExecutor<'a> {
+impl Executor for TopNExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         if self.iter.is_none() {
             self.fetch_all()?;
