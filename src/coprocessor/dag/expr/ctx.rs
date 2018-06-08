@@ -202,7 +202,8 @@ impl EvalContext {
 
     /// handle_overflow treats ErrOverflow as warnings or returns the error
     /// based on the cfg.handle_overflow state.
-    pub fn handle_overflow(&mut self, err: Error) -> Result<()> {
+    pub fn handle_overflow(&mut self, data: &str, expr: &str) -> Result<()> {
+        let err = Error::overflow(data, expr);
         if self.cfg.overflow_as_warning {
             self.warnings.append_warning(err);
             Ok(())

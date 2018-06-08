@@ -16,7 +16,7 @@ use std::{str, i64, u64};
 
 use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
 use coprocessor::codec::mysql::decimal::RoundMode;
-use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Time};
+use coprocessor::codec::mysql::{charset, decimal, types, Decimal, Duration, Json, Res, Time};
 use coprocessor::codec::{mysql, Datum, Error as CError};
 
 use super::{Error, EvalContext, FnCall, Result};
@@ -439,7 +439,7 @@ impl FnCall {
         match Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8) {
             Ok(dur) => Ok(Some(Cow::Owned(dur))),
             Err(CError::Overflow(_, _)) => {
-                ctx.handle_overflow(Error::overflow("Duration", &format!("{}", val)))?;
+                ctx.handle_overflow("Duration", &format!("{}", val))?;
                 Ok(None)
             }
             Err(e) => Err(e.into()),
@@ -609,8 +609,36 @@ impl FnCall {
         if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
             return Ok(val);
         }
-        let res = val.into_owned().convert_to(ctx, flen as u8, decimal as u8)?;
-        Ok(Cow::Owned(res))
+        //let res = val.into_owned().convert_to(ctx, flen as u8, decimal as u8)?;
+        let (flen, decimal) = (flen as u8, decimal as u8);
+
+        let (prec, frac) = val.prec_and_frac();
+        if !val.is_zero() && prec - frac > flen - decimal {
+            // select (cast 111 as decimal(1)) causes a warning in MySQL.
+            ctx.handle_overflow("DECIMAL", &format!("({}, {})", flen, decimal))?;
+            return Ok(decimal::max_or_min_dec(val.negative(), flen, decimal)).map(Cow::Owned);
+        }
+
+        if frac == decimal {
+            return Ok(val);
+        }
+        let val = val.into_owned();
+        let ret: Decimal = match val.clone().round(decimal as i8, RoundMode::HalfEven) {
+            Res::Ok(v) => v,
+            Res::Overflow(v) => return Err(Error::overflow("DECIMAL", &format!("{}", v))),
+            Res::Truncated(v) => {
+                return Err(Error::truncated_wrong_val("DECIMAL", &format!("{}", v)))
+            }
+        };
+        if !ret.is_zero() && frac > decimal && ret != val {
+            if ctx.cfg.in_insert_stmt || ctx.cfg.in_update_or_delete_stmt {
+                ctx.warnings
+                    .append_warning(Error::truncated_wrong_val("DECIMAL", ""));
+            } else {
+                ctx.handle_truncate_err(Error::truncated_wrong_val("DECIMAL", ""))?;
+            }
+        }
+        Ok(Cow::Owned(ret))
     }
 
     /// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in tidb) produces

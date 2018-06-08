@@ -854,6 +854,9 @@ pub enum RoundMode {
 }
 
 impl Decimal {
+    pub fn negative(&self) -> bool {
+        self.negative
+    }
     /// abs the Decimal into a new Decimal.
     #[inline]
     pub fn abs(mut self) -> Res<Decimal> {
@@ -1078,29 +1081,6 @@ impl Decimal {
             buf_from -= 1;
         }
         self.word_buf[buf_from] /= TEN_POW[shift];
-    }
-
-    /// convert_to(ProduceDecWithSpecifiedTp in tidb)
-    /// produces a new decimal according to `flen` and `decimal`.
-    pub fn convert_to(self, ctx: &mut EvalContext, flen: u8, decimal: u8) -> Result<Decimal> {
-        let (prec, frac) = self.prec_and_frac();
-        if !self.is_zero() && prec - frac > flen - decimal {
-            return Ok(max_or_min_dec(self.negative, flen, decimal));
-            // TODO:select (cast 111 as decimal(1)) causes a warning in MySQL.
-        }
-
-        if frac == decimal {
-            return Ok(self);
-        }
-
-        let tmp = self.clone();
-        let ret = self.round(decimal as i8, RoundMode::HalfEven).unwrap();
-        // TODO: process over_flow
-        if !ret.is_zero() && frac > decimal && ret != tmp {
-            // TODO handle InInsertStmt in ctx
-            box_try!(ctx.handle_truncate(true));
-        }
-        Ok(ret)
     }
 
     /// Round rounds the decimal to "frac" digits.
